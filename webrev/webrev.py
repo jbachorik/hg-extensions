@@ -1,54 +1,61 @@
 from mercurial import util, commands
-from subprocess import call
+from subprocess import call, check_output
 
 import urllib2
+import urllib
 import shutil
 import os
 import tempfile
 import json
+import cookielib
+import stat
 
 webrev_origin = "http://hg.openjdk.java.net/code-tools/webrev/raw-file/tip/webrev.ksh"
 issue_api = "https://bugs.openjdk.java.net/rest/api/latest/issue"
+authURL = "https://id.openjdk.java.net/console/login"
+
+opener = None
 
 def webrev(ui, repo, **opts):
     wrev = findWebrev(ui)
     if not wrev:
         ui.warning("'webrev' tool not available. Exitting.\n")
         return
-    
+
     update = opts['update']
     rev = opts['revision']
-        
+
     ctx = repo[None if rev == '' else rev]
     user = ctx.user()
     server = opts['server']
-    
+
     issue = opts['issue']
     if issue == '':
         issue = inferIssue(ui, ctx)
-    
+
     if not issue:
         issue = ui.prompt("Enter the issue number: ")
-        
+
     if not issue:
         ui.warning("No issue number provided. Exitting.\n")
         return
 
     augmentChange(ui, ctx, issue)
+
     parent = findChangeRoot(ui, ctx)
 
     if parent:
         call(["webrev", "-N", "-c", issue, "-r", str(parent.rev()), "-o", issue])
     else:
         call(["webrev"])
-        
+
     augmentWebrev(ui, issue)
-    
+
     uploadWebrev(ui, server, issue, user, update)
 
 def augmentChange(ui, ctx, issue):
     if "qtip" in ctx.tags():
-        issueJs = loadIssue(ui, issue)    
+        issueJs = loadIssue(ui, issue)
         title = issueTitle(ui, issue, issueJs)
         call(['hg', 'qrefresh', '-m', '%s' % title])
 
@@ -60,17 +67,17 @@ def findChangeRoot(ui, ctx):
 
 def findMqRoot(ui, ctx):
     first = findMqFirst(ui, ctx)
-    
+
     return first.parents()[0] if first else None
-    
+
 def findBranchRoot(ui, ctx):
     branch = ctx.branch()
     if branch == "default":
         return ctx
-    
+
     for c in ctx.parents():
         return findBranchRoot(ui, c)
-        
+
 
     return None
 
@@ -83,7 +90,7 @@ def findChangeFirst(ui, ctx):
 def findMqFirst(ui, ctx):
     if "qbase" in ctx.tags() and not str(ctx).endswith('+'):
         return ctx
-    
+
     for c in ctx.parents():
         return findMqFirst(ui, c)
 
@@ -94,47 +101,47 @@ def findBranchFirst(ui, ctx):
             return ctx
 
         return findBranchFirst(ui, c)
-        
+
     return None
 
 def findLatestDefault(ui, ctx):
     for c in ctx.children():
         if c.branch() == 'default':
             return findLatestDefault(ui, c)
-        
+
     return ctx if ctx.branch() == 'default' else None
-    
-def inferIssue(ui, ctx):    
+
+def inferIssue(ui, ctx):
     for tag in ctx.tags():
         if tag.startswith("JDK-"):
             issue = validateIssue(ui, tag)
             if (issue):
                 return issue[4:]
-    
+
     for bkmk in ctx.bookmarks():
         issue = validateIssue(ui, bkmk)
         if issue:
             return issue[4:]
-            
+
     return None
 
 def validateIssue(ui, issue):
-    baseUrl = "https://bugs.openjdk.java.net/browse/"
-    
+    url = "%s/%s" % (issue_api, issue)
+
     ui.note("Validating issue number " + issue + "\n")
     try:
-        ui.note("Opening URL: " + baseUrl + issue + "\n")
-        urllib2.urlopen(baseUrl + issue)
+        ui.note("Opening URL: %s\n" % url)
+        loadData(ui, url)
         return issue
     except urllib2.HTTPError, e:
         ui.note("%s\n" % e)
     except urllib2.URLError, e:
         ui.note("%s\n" % e)
-        
+
     return None
 
-def augmentWebrev(ui, issue):   
-    issueJs = loadIssue(ui, issue)    
+def augmentWebrev(ui, issue):
+    issueJs = loadIssue(ui, issue)
     title = issueTitle(ui, issue, issueJs)
     if title:
         fTitle = "%s/webrev/.title" % issue
@@ -145,21 +152,56 @@ def issueTitle(ui, issue, issueJs):
     if issueJs:
         title = "%s: %s" % (issue, issueJs['fields']['summary'])
         return title
-    
+
     return None
 
 def loadIssue(ui, issue):
     try:
-        response = urllib2.urlopen("%s/JDK-%s" % (issue_api, issue))
+        response = loadData(ui, "%s/JDK-%s" % (issue_api, issue))
         issueJs = json.load(response)
-        
+
         return issueJs
     except urllib2.HTTPError, e:
         ui.note("%s\n" % e)
     except urllib2.URLError, e:
         ui.note("%s\n" % e)
-        
+
     return None
+
+def loadData(ui, url):
+    authenticate(ui)
+
+    req = urllib2.Request(url)
+    req.add_header("Content-type", "application/json")
+    req.add_header("Accept", "application/json")
+    return opener.open(req)
+
+def authenticate(ui):
+    global opener
+
+    if opener:
+        return opener
+
+    uname = ui.config("jbs", "username", default = None, untrusted = False)
+    upwd = ui.config("jbs", "password", default = None, untrusted = False)
+
+    ui.note("Authenticating\n")
+
+    cj = cookielib.CookieJar()
+    opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj))
+
+    login_data = urllib.urlencode({
+        'email' : uname,
+        'password' : upwd,
+    })
+
+    req = urllib2.Request(authURL)
+    fp = opener.open(req, login_data)
+
+    fp.close()
+    ui.note("done\n")
+
+    return opener
 
 def uploadWebrev(ui, server, issue, user, update):
     unused = False
@@ -178,34 +220,34 @@ def uploadWebrev(ui, server, issue, user, update):
         except urllib2.URLError, e:
             ui.note("%s\n" % e)
             unused = True
-            
-        
+
+
     if update and ver > 0:
         ver -= 1
         postfix = ".%02d" % ver
-    
+
     ui.write("Creating a new revision of webrev for %s: %2d\n" % (issue, ver))
 
     destDir = "%s/webrev%s" % (issue, postfix)
     destZip = "%s/webrev%s.zip" % (issue, postfix)
     if os.path.exists(destDir):
         shutil.rmtree(destDir)
-        
+
     if os.path.exists(destZip):
        os.remove(destZip)
-     
+
     shutil.move(issue + "/webrev", destDir)
     shutil.move(issue + "/webrev.zip", destZip)
     resp = ui.promptchoice("Review created in '%s'\nDo you want to preview it(Yn)? $$ &Yes $$ &No" % os.path.abspath(destDir), 0)
 
     upload = True
-    
+
     if resp == 0:
         reviewUrl = "file://%s/index.html" % os.path.abspath(destDir)
         call(["google-chrome", reviewUrl])
         resp = ui.promptchoice("Upload review(yN)? $$ &Yes $$ &No", 1)
         upload = (resp == 0)
-        
+
     if upload:
         call(["rsync", "-i", "-z", "-a", "%s" % os.path.abspath(issue), "%s@cr.openjdk.java.net:" % user])
         ui.write("Review available at '%s%s'\n" % (url, postfix))
@@ -214,26 +256,26 @@ def uploadWebrev(ui, server, issue, user, update):
 
 def findWebrev(ui):
     wr = which("webrev")
-    
-    if not wr:       
+
+    if not wr:
         tmpdir = tempfile.gettempdir()
         wr = "%s/webrev" % tmpdir
-        
+
         if not os.path.exists(wr):
             ui.write("'webrev' not found in PATH. Attempting to download from OpenJDK...\n")
             try:
                 f = urllib2.urlopen(webrev_origin)
                 with open(wr, "wb") as local_file:
                     local_file.write(f.read())
-                
+
                 return wr
             except HTTPError, e:
                 ui.warning("%s\n" % e)
             except URLError, e:
                 ui.warning("%s\n" % e)
-            
+
             return None
-        
+
     return wr
 
 def which(pgm):
@@ -245,24 +287,24 @@ def which(pgm):
 
 def integrate(ui, repo, **opts):
     rev = opts['revision']
-        
+
     ctx = repo[None if rev == '' else rev]
-    
+
     issue = opts['issue']
     if issue == '':
         issue = inferIssue(ui, ctx)
-    
+
     if not issue:
         issue = ui.prompt("Enter the issue number: ")
-        
+
     if not issue or issue == '':
         ui.warning("No issue number provided. Exitting.\n")
         return
-    
+
     revs = opts['reviewedby']
     if revs == '':
         revs = ui.prompt("Enter reviewers (comma separated): ")
-        
+
     if not revs or revs == '':
         ui.warning('No reviewers provided. Exitting.\n')
 
@@ -270,14 +312,14 @@ def integrate(ui, repo, **opts):
     root = findBranchRoot(ui, ctx)
     if root:
         dest = findLatestDefault(ui, root)
-        
+
     src = findBranchFirst(ui, ctx)
     ui.write('src: %s\n' % src)
     ui.write('dst: %s\n' % dest)
-    
+
     issueJs = loadIssue(ui, issue)
     commit_message = '%s\nReviewed-by: %s' % (issueTitle(ui, issue, issueJs), revs)
-    
+
     ui.write("msg: %s\n" % commit_message)
     if src:
         call(['hg', 'rebase', '--dest', str(dest), '--source', str(src)])
@@ -285,6 +327,24 @@ def integrate(ui, repo, **opts):
     else:
         call(['hg', 'rebase', '--dest', str(dest)])
         call(['hg', 'commit', '--amend', '-m', commit_message])
+
+def qexport(ui, repo, patch, **opts):
+    export_cmd = ['hg', 'export']
+    if opts['git']:
+        export_cmd.append('-g')
+
+    export_cmd.append(patch)
+
+    active = check_output(['hg', 'qtop']).strip()
+
+    # ok, let's go and apply the patch to export
+    check_output(['hg', 'qgoto', patch])
+    ui.write(check_output(export_cmd))
+
+    check_output(['hg', 'qgoto', active])
+    call(['hg', 'purge'])
+    call(['hg', 'update', '-C'])
+
 
 cmdtable = {
     # "command-name": (function-call, options-list, help-string)
@@ -294,10 +354,14 @@ cmdtable = {
                       ('i', 'issue', '', 'the associated issue number'),
                       ('', 'server', 'cr.openjdk.java.net', 'server to publish the webrev')],
                      "hg webrev [options]"),
-                    
+
     "integrate": (integrate,
                      [('r', 'revision', '', 'revision number'),
                       ('w', 'reviewedby', '', 'comma separated list of reviewers'),
                       ('i', 'issue', '', 'the associated issue number')],
-                    "hg integrate [options]")
+                    "hg integrate [options]"),
+
+    "qexport": (qexport,
+                    [('g', 'git', False, 'git format')],
+                    "hg qexport [options] patch-name")
 }
