@@ -15,6 +15,7 @@ When the issue number can not be inferred a prompt is presented where you can en
 
 #### Options
 * *-u, --update* - will not generate the new sequnce suffix for the webrev and update the latest one instead
+* *-c, --category* - an additional qualifier eg. 'jdk'; useful for putting eg. hotspot + jdk changes under one review
 * *-r, --revision* - the revision to create the webrev for
 * *-i, --issue* - the associated issue
 * *--server* - the webrev upload server
