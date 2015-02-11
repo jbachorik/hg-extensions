@@ -36,3 +36,17 @@ webrev = <path to webrev.py>
 username = <user name>
 password = <password>
 ```
+
+#### Configuring e-mail generator
+
+By setting up the mail generator properly the extension will create a templated review request
+
+```
+[webrev.mailer]
+# the mailing application
+app = thunderbird
+# the mailer command to create a new e-mail
+cmd = -compose
+# new e-mail properties - the extension will replace $subject and $body with the proper e-mail subject and body, respectively
+args = subject='$subject', body='$body'
+```
