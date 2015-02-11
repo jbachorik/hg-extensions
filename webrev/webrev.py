@@ -261,9 +261,9 @@ def uploadWebrev(ui, server, issue, category, user, update):
 
     if upload:
         call(["rsync", "-i", "-z", "-a", "%s" % os.path.abspath(issue), "%s@cr.openjdk.java.net:" % user])
-        mailer = ui.config("webrev", "mailer", default = None, untrusted = None)
-        mail_cmd = ui.config("webrev", "cmd", default = None, untrusted = None)
-        mail_args = ui.config("webrev", "args", default = None, untrusted = None)
+        mailer = ui.config("webrev.mailer", "app", default = None, untrusted = None)
+        mail_cmd = ui.config("webrev.mailer", "cmd", default = None, untrusted = None)
+        mail_args = ui.config("webrev.mailer", "args", default = None, untrusted = None)
         
         if mailer:
             s = Template(mail_args)
