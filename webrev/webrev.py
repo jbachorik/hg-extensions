@@ -1,5 +1,6 @@
 from mercurial import util, commands
 from subprocess import call, check_output
+from string import Template
 
 import urllib2
 import urllib
@@ -24,7 +25,8 @@ def webrev(ui, repo, **opts):
 
     update = opts['update']
     rev = opts['revision']
-
+    category = opts['category']
+    
     ctx = repo[None if rev == '' else rev]
     user = ctx.user()
     server = opts['server']
@@ -51,13 +53,14 @@ def webrev(ui, repo, **opts):
 
     augmentWebrev(ui, issue)
 
-    uploadWebrev(ui, server, issue, user, update)
+    uploadWebrev(ui, server, issue, category, user, update)
 
 def augmentChange(ui, ctx, issue):
     if "qtip" in ctx.tags():
         issueJs = loadIssue(ui, issue)
         title = issueTitle(ui, issue, issueJs)
-        call(['hg', 'qrefresh', '-m', '%s' % title])
+        revdby = '\nReviewed-by: duke' if 'Reviewed-by:' in title else ''
+        call(['hg', 'qrefresh', '-m', '%s%s' % (title, revdby)])
 
 def findChangeRoot(ui, ctx):
     if "qtip" in ctx.tags():
@@ -155,6 +158,10 @@ def issueTitle(ui, issue, issueJs):
 
     return None
 
+def issueTitleEx(ui, issue):
+    issueJs = loadIssue(ui, issue)
+    return issueTitle(ui, issue, issueJs)
+
 def loadIssue(ui, issue):
     try:
         response = loadData(ui, "%s/JDK-%s" % (issue_api, issue))
@@ -203,7 +210,7 @@ def authenticate(ui):
 
     return opener
 
-def uploadWebrev(ui, server, issue, user, update):
+def uploadWebrev(ui, server, issue, category, user, update):
     unused = False
 
     url = "http://%s/~%s/%s/webrev" % (server, user, issue)
@@ -225,11 +232,15 @@ def uploadWebrev(ui, server, issue, user, update):
     if update and ver > 0:
         ver -= 1
         postfix = ".%02d" % ver
-
-    ui.write("Creating a new revision of webrev for %s: %2d\n" % (issue, ver))
-
-    destDir = "%s/webrev%s" % (issue, postfix)
-    destZip = "%s/webrev%s.zip" % (issue, postfix)
+        ui.write("Updating an existing revision of webrev for %s: %2d\n" % (issue, ver))
+    else:
+        ui.write("Creating a new revision of webrev for %s: %2d\n" % (issue, ver))
+        
+    if category:
+        category = "/%s" % category
+        
+    destDir = "%s/webrev%s%s" % (issue, postfix, category)
+    destZip = "%s/webrev%s%s.zip" % (issue, postfix, category)
     if os.path.exists(destDir):
         shutil.rmtree(destDir)
 
@@ -250,7 +261,24 @@ def uploadWebrev(ui, server, issue, user, update):
 
     if upload:
         call(["rsync", "-i", "-z", "-a", "%s" % os.path.abspath(issue), "%s@cr.openjdk.java.net:" % user])
-        ui.write("Review available at '%s%s'\n" % (url, postfix))
+        mailer = ui.config("webrev", "mailer", default = None, untrusted = None)
+        mail_cmd = ui.config("webrev", "cmd", default = None, untrusted = None)
+        mail_args = ui.config("webrev", "args", default = None, untrusted = None)
+        
+        if mailer:
+            s = Template(mail_args)
+            subj = 'RFR %s: %s' % (issue, issueTitleEx(ui, issue))
+            bdy = 'Please, review the following change\n\n' \
+                   'Issue : %s/JDK-%s\n' \
+                   'Webrev: %s%s\n\n' \
+                   '<message goes here>' % (issue_api, issue, url, postfix)
+                   
+            args = '"%s"' % s.substitute(subject = urllib.quote_plus(subj), body = urllib.quote_plus(bdy))
+            ui.write("args =  %s\n" % args)
+            call([mailer, mail_cmd, args])
+        else:
+            ui.write("Issue : %s/JDK-%s\n" % (issue_api, issue))
+            ui.write("Webrev: %s%s\n" % (url, postfix))       
     else:
         ui.write("Review upload cancelled!\n")
 
@@ -352,6 +380,7 @@ cmdtable = {
                      [('r', 'revision', '', 'revision number'),
                       ('u', 'update', None, 'update the latest webrev in-place'),
                       ('i', 'issue', '', 'the associated issue number'),
+                      ('c', 'category', '', 'webrev qualifier - eg. hotspot, jdk etc.'),
                       ('', 'server', 'cr.openjdk.java.net', 'server to publish the webrev')],
                      "hg webrev [options]"),
 
