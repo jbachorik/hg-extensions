@@ -13,6 +13,7 @@ import stat
 
 webrev_origin = "http://hg.openjdk.java.net/code-tools/webrev/raw-file/tip/webrev.ksh"
 issue_api = "https://bugs.openjdk.java.net/rest/api/latest/issue"
+issue_browse = "https://bugs.openjdk.java.net/browse"
 authURL = "https://id.openjdk.java.net/console/login"
 
 opener = None
@@ -261,21 +262,20 @@ def uploadWebrev(ui, server, issue, category, user, update):
 
     if upload:
         call(["rsync", "-i", "-z", "-a", "%s" % os.path.abspath(issue), "%s@cr.openjdk.java.net:" % user])
-        mailer = ui.config("webrev.mailer", "app", default = None, untrusted = None)
-        mail_cmd = ui.config("webrev.mailer", "cmd", default = None, untrusted = None)
-        mail_args = ui.config("webrev.mailer", "args", default = None, untrusted = None)
+        mailer = ui.config("webrev", "mailer", default = None, untrusted = None)
+        mail_args = mailer.split(' ')
         
         if mailer:
-            s = Template(mail_args)
+            s = Template(mail_args[2])
             subj = 'RFR %s: %s' % (issue, issueTitleEx(ui, issue))
             bdy = 'Please, review the following change\n\n' \
                    'Issue : %s/JDK-%s\n' \
                    'Webrev: %s%s\n\n' \
-                   '<message goes here>' % (issue_api, issue, url, postfix)
+                   '<message goes here>' % (issue_browse, issue, url, postfix)
                    
-            args = '"%s"' % s.substitute(subject = urllib.quote_plus(subj), body = urllib.quote_plus(bdy))
+            args = '%s' % s.substitute(subject = urllib.quote(subj), body = urllib.quote(bdy))
             ui.write("args =  %s\n" % args)
-            call([mailer, mail_cmd, args])
+            call([mail_args[0], mail_args[1], args])
         else:
             ui.write("Issue : %s/JDK-%s\n" % (issue_api, issue))
             ui.write("Webrev: %s%s\n" % (url, postfix))       
