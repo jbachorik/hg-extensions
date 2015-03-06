@@ -47,10 +47,25 @@ def webrev(ui, repo, **opts):
 
     parent = findChangeRoot(ui, ctx)
 
+    patches = check_output(['hg', 'qseries']).splitlines()
+    if patches:
+        qtop = check_output(['hg', 'qtop']).strip()
+
+        check_output(['hg', 'qpop', '-a'])
+        check_output(['hg', 'qpush', '--move', qtop])
+
     if parent:
         call(["webrev", "-N", "-c", issue, "-r", str(parent.rev()), "-o", issue])
     else:
         call(["webrev"])
+    
+    if patches:
+        check_output(['hg', 'qpop', '-a'])
+        for patch in patches:
+            patch = patch.strip()
+            check_output(['hg', 'qpush', '--move', patch])
+            if patch == qtop:
+                break
 
     augmentWebrev(ui, issue)
 
@@ -355,6 +370,28 @@ def integrate(ui, repo, **opts):
     else:
         call(['hg', 'rebase', '--dest', str(dest)])
         call(['hg', 'commit', '--amend', '-m', commit_message])
+        
+def jbsrefresh(ui, repo, **opts):
+    rev = opts['revision']
+
+    ctx = repo[None if rev == '' else rev]
+
+    issue = opts['issue']
+    if issue == '':
+        issue = inferIssue(ui, ctx)
+
+    if not issue:
+        issue = ui.prompt("Enter the issue number: ")
+
+    if not issue or issue == '':
+        ui.warning("No issue number provided. Exitting.\n")
+        return
+
+    revs = opts['reviewedby']
+    if revs == '':
+        revs = 'duke'
+
+    augmentChange(ui, ctx, issue)
 
 def qexport(ui, repo, patch, **opts):
     export_cmd = ['hg', 'export']
@@ -383,6 +420,12 @@ cmdtable = {
                       ('c', 'category', '', 'webrev qualifier - eg. hotspot, jdk etc.'),
                       ('', 'server', 'cr.openjdk.java.net', 'server to publish the webrev')],
                      "hg webrev [options]"),
+                     
+    "jbsrefresh": (jbsrefresh,
+                    [('r', 'revision', '', 'revision number'),
+                     ('i', 'issue', '', 'the issue number'),
+                     ('w', 'reviewedby', '', 'comma separated list of reviewers')],
+                   "hg jbsrefresh [options]"),
 
     "integrate": (integrate,
                      [('r', 'revision', '', 'revision number'),
